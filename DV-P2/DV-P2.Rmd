@@ -1,0 +1,349 @@
+---
+title: "DV-P2"
+author: "Peijin Li"
+date: "2023-01-21"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+knitr::opts_chunk$set(echo = TRUE)
+## import libraries 
+library(tidyverse)
+library(ggrepel)
+library(scales)
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+library(reshape)
+library(haven)
+library(viridis)
+library(hrbrthemes)
+library(gghighlight)
+library(ggcorrplot)
+library(fastDummies)
+library(countrycode)
+library("plyr")
+## install.packages("maps")
+library(maps)
+##
+library(geojsonio)
+library(sp)
+library(tidycensus)
+
+library(usmap)
+library(dplyr)
+library(stringr)
+library(sf)
+library(USAboundaries)
+
+library(tilegramsR)
+library(googlesheets4)
+
+library(statebins)
+library(socviz)
+library(tilegramsR)
+
+library(gifski)
+library(tidyquant)
+library(dplyr, warn.conflicts = FALSE)
+library(gganimate)
+library(leaflet)
+library(tigris)
+
+library(htmlwidgets)
+library(htmltools)
+```
+
+Question 1: Reproduce the map plot below, which shows the capacity_mw and location of power generation facilities in Washington DC, Maryland, Virginia and West Virginia. Things to note:
+
+The data includes only facilities in DC, MD, VA and WV Transparency of the circles representing capacity_mw Key cities are labelled and repelled There are both state borders, and lighter county borders It is a polyconic map projection
+
+```{r}
+dv_global <- read_csv("D:/GitHub_Peijin/Data-Viz-R/DV-P2/global_power_plant_database.csv")
+```
+
+```{r}
+#dim(dv_global)
+
+#unique(dv_global$country_long)
+## select the rows of USA
+dv_global_V1 = dv_global[dv_global$country_long == "United States of America", ]
+#head(dv_global_V1,4)
+
+### select the rows in certain regions
+# get usa polygon data
+# http://eric.clst.org/tech/usgeojson/
+usa <- geojson_read(
+  "http://eric.clst.org/assets/wiki/uploads/Stuff/gz_2010_us_040_00_500k.json", 
+  what = "sp"
+)
+## add a null column 
+dv_global_V1$state <- NA
+
+# compare points
+for (i in 1:nrow(dv_global_V1)) {
+  coords <- c(dv_global_V1$longitude[i], dv_global_V1$latitude[i])
+  if(any(is.na(coords))) next
+  point <- sp::SpatialPoints(
+    matrix(
+      coords,
+      nrow = 1
+    )
+  )
+  sp::proj4string(point) <- sp::proj4string(usa)
+  polygon_check <- sp::over(point, usa)
+  dv_global_V1$state[i] <- as.character(polygon_check$NAME)
+}
+
+#unique(dv_global_V1$state)
+## select the rows of certain states 
+dv_global_V1_1 <- subset(dv_global_V1, state=="District of Columbia" | state=="Maryland" | state=="Virginia" | state=="West Virginia")
+#head(dv_global_V1_1,4)
+
+## select the states
+counties <- map_data("county")
+states <- map_data("state")
+states_1 <- subset(states, region=="district of columbia" | region=="maryland" | region=="virginia" | region=="west virginia")
+counties_1 <- subset(counties, region=="district of columbia" | region=="maryland" | region=="virginia" | region=="west virginia")
+
+# get us city info
+data(us.cities) 
+
+# I only want capital cities for Washington DC, Maryland, Virginia and West Virginia
+us_capitals <- us.cities %>% filter(country.etc %in% c("MD","WV","VA","DC"))
+#us_capitals
+
+key_cities <- subset(us_capitals, name=="Danville VA"| name=="Dale City VA" | name=="Blacksburg VA" | name=="Chesapeake VA"| name=="Roanoke VA"| name=="Virginia Beach VA"| name=="Suffolk VA"| name=="Richmond VA"| name=="Norfolk VA"| name=="    Hampton VA"| name=="Portsmouth VA"| name=="Newport News VA"| name=="Tuckahoe VA"| name=="Lynchburg VA"| name=="Harrisonburg VA"| name=="Bel Air South MD"| name=="Frederick MD"| name=="Charleston WV"| name=="Huntington WV")
+
+## plot certain regions
+ggplot() +
+  geom_polygon(data = counties_1, 
+               aes(x = long,
+                   y = lat, 
+                   group = group),
+               color = "grey90",
+               fill = "white") +
+  geom_polygon(data = states_1,
+               aes(x = long,
+                   y = lat,
+                   group = group),
+               color = "black",
+               alpha = 0) +
+  geom_point(data=dv_global_V1_1, 
+             aes(x=longitude, y=latitude,
+              size=capacity_mw, color=state), alpha = 0.4) +
+   scale_size_continuous(range=c(1, 7)) +
+  labs(size="Capacity(MW)", color="State")+
+  
+  geom_text_repel(data = key_cities, aes(long, lat, label = name, group = NULL),size = 2.5)+
+  
+   ggtitle(label = "Power Plants in the DMV Region by Capacity",
+              subtitle = "Virginia has larger number of higher capacity power plants compared to other DMV regions")+
+   theme_void()+
+  coord_map("polyconic")
+```
+
+Question 2: Reproduce the map plot below, which shows median household income from the 2016-2020 ACS in Virginia by county. BUT, the counties that comprise Northern Virginia are grouped together into one distinct region, while the rest of the state is represented by individual counties. The variable shown for those Northern Virginia counties is the median of the median household incomes for that group of counties. I used the definition of Northern Virginia from here. A few things to take note of:
+
+label for NoVa area the label formatting on the legend the color scale
+
+```{r}
+## prepare the data
+census_api_key("c03f4515af7e41dc4683c399c808140605b5ab1c", overwrite=TRUE) 
+```
+
+```{r}
+readRenviron("~/.Renviron")
+
+options(tigris_use_cache = TRUE)
+## Getting data from the 2016-2020 5-year ACS
+va_income <- get_acs(
+  state = "51",
+  geography = "county",
+  variables = "B19013_001",
+  geometry = TRUE,
+  year = 2020
+)
+```
+
+```{r}
+## select Alexandria, Arlington County, Clarke County, Culpeper County, Fairfax, Fairfax County, Falls Church, Fauquier County, Frederick County, Fredericksburg, Loudoun County, Madison County, Manassas, Manassas Park, Prince William County, Rappahannock County, Spotsylvania County, Stafford County, Warren County, Winchester 
+
+va_income$NoVA = ifelse(grepl("(Alexandria city, Virginia|Arlington County, Virginia|Clarke County, Virginia|Culpeper County, Virginia|Fairfax County, Virginia|Fairfax city, Virginia|Falls Church city, Virginia|Fauquier County, Virginia|Frederick County, Virginia|Fredericksburg city, Virginia|Loudoun County, Virginia|Madison County, Virginia|Prince William County, Virginia|Manassas city, Virginia|Manassas Park city, Virginia|Rappahannock County, Virginia|Spotsylvania County, Virginia|Stafford County, Virginia|Warren County, Virginia|Winchester city, Virginia)",va_income$NAME),1,0)
+
+## set 0 as random numbers 
+va_income$NoVA[va_income$NoVA==0] <- sample(2:116 , replace=FALSE)
+q2_dv <- group_by(va_income, NoVA)
+q2_dv1 <- dplyr::summarise(q2_dv, m_income = median(estimate))
+## add NoVA label 
+q2_dv1<-q2_dv1 %>% dplyr::mutate(new_NoVA = case_when(NoVA== 1 ~"NoVA" , NoVA != 1  ~ " " ))
+
+# plot 
+ggplot(q2_dv1) +
+  geom_sf(aes(fill=m_income), color = NA)+
+  geom_sf_text(aes(label = new_NoVA), colour = "black")+
+  scale_fill_viridis_c(option = 'magma',breaks=c(40000,60000,80000,100000), labels=c("$40K","$60K","$80K","$100K"))+
+  labs(title = "Median Income by County in Virginia", subtitle='Northern Virginia has higher median income compared to the rest of Virginia region',fill='Median Income')+
+  theme_void()
+```
+
+Question 3: Reproduce the hexbin map below, which displays results from the 2016 presidential election by state, including the percent margin and the winner of each state. Things to take note of:
+
+the type of cartogram the coloring of the hexbin the coloring of the borders
+
+```{r}
+## get the data
+# get the shape file for US 
+q3 <- sf_NPR1to1 
+# marge the state data with the election data 
+q3 <- left_join(q3, election, by = c("state"="st"))
+```
+
+```{r}
+## calculate 
+q3 <- q3 %>% mutate(new = case_when(party == "Democratic" ~ 0-pct_margin, party == "Republican" ~ pct_margin ))
+
+## plot
+mid= mean(q3$new, na.rm = TRUE)
+
+q3 %>% ggplot() +
+  geom_sf(aes(fill = new, color=winner )) +
+  geom_sf_text(aes(label = state), color = "white") +
+  scale_fill_gradient2(midpoint=mid,low='blue4',mid='darkgray' ,high='brown', breaks=c(-0.5,0.0), labels=c("-0.5%","0.0%")) + 
+  scale_color_manual(values = c('blue3', 'red') )+ 
+  theme_void()+
+   ggtitle(label = "2016 Presidential Election Results",
+              subtitle = "Trump won the presidential elections with a majority in 30 states")+
+   labs(fill="Trump Margin",color = "Winner")
+```
+
+Question 4: Use the tidyquant library and it’s tq_get function to grab the historical stock prices for the FAANG stocks: Facebook, Apple, Amazon, Netflix, and Google. Then recreate the animated plot below. Things to take note of:
+
+We are using a linear easing The variable title The display of a data “wake” The transparency of the circles The format of the X and Y axis labels The animation has 300 frames
+
+```{r}
+## prepare the data 
+FAANG_stocks <- tq_get(c("AMZN", "AAPL", "GOOG", "META", "NFLX"),get  = "stock.prices",from = "2012-01-01",to = "2022-10-01")
+
+#Changes the company names
+FAANG_stocks$symbol[FAANG_stocks$symbol == 'AMZN'] <- 'Amazon'
+FAANG_stocks$symbol[FAANG_stocks$symbol == 'AAPL'] <- 'Apple'
+FAANG_stocks$symbol[FAANG_stocks$symbol == 'GOOG'] <- 'Google'
+FAANG_stocks$symbol[FAANG_stocks$symbol == 'META'] <- 'Meta'
+FAANG_stocks$symbol[FAANG_stocks$symbol == 'NFLX'] <- 'Netflix'
+
+## Plot
+FAANG_p4 <-ggplot(FAANG_stocks, aes(x = volume, y = adjusted)) +
+  geom_point(aes(color = symbol), size = 10) +
+  scale_size(range = c(10, 12), guide = FALSE) + 
+  theme(legend.title= element_blank()) +
+  # Animating the plot
+  labs(title = "Adjusted Price and Volume for FAANG stocks: {frame_time}",x = "Trading Volume",y = "Adjusted Price") +
+  scale_x_continuous(trans = 'log10', limits = c(1000000, 1500000000), labels = label_number(suffix = "MM", scale = 1e-6, big.mark = ",")) +
+  scale_y_continuous(labels = label_number(prefix = '$')) +
+  gganimate::transition_time(date) +
+  gganimate::shadow_wake(wake_length = 0.1, alpha = 0.7) +
+  gganimate::ease_aes('linear')
+
+animate(FAANG_p4, nframes = 300, width = 500, height = 400, renderer = gifski_renderer())
+```
+
+```{r}
+#anim_save("p4_stocks.gif")
+```
+
+Question 5: Using gun_background_checks.csv, create a choropleth map of any element from the dataset. The data is a file of Firearm Background Check data collected by the FBI. You can find details on the data here
+
+Your plot should have a legend (if necessary), descriptive title and subtitle, and all plot elements should be human readable (no overlapping text, no acronyms unless they are defined, no underscores). Scales should make sense and be rounded to 2 digits or less (if applicable). You may NOT use the default Mercator projection
+
+BONUS: (not required) - turn this into an interactive map (with appropriate popups) using the leaflet package.
+
+```{r}
+## prepare the data
+dv_gun <- read_csv("D:/GitHub_Peijin/Data-Viz-R/DV-P2/gun_background_checks.csv")
+```
+
+```{r}
+## calculate the total number of handguns for each state
+dv_gun_se <- dv_gun%>% group_by(state)%>% dplyr::summarize(total=sum(handgun,na.rm=TRUE))
+
+# Downloading the shapefiles for states at the lowest resolution
+states <- states(cb=T)
+```
+```{r}
+## merge the two datasets
+#q5_dv <- left_join(states, dv_gun_se, by = c("NAME"="state"))
+q5_dv = merge(states,  dv_gun_se, by.x = "NAME", by.y = 'state')
+
+## prepare the parameters 
+popup_sb <- paste0("State: ",q5_dv$NAME,", Handgun Number: ", as.character(q5_dv$total))
+pal_sb <- colorNumeric("Greens", domain=q5_dv$total)
+q5_dv <- subset(q5_dv, !is.na(total))
+
+tag.map.title <- tags$style(HTML("
+  .leaflet-control.map-title { 
+    transform: translate(-50%,20%);
+    position: fixed !important;
+    left: 50%;
+    text-align: center;
+    padding-left: 10px; 
+    padding-right: 10px; 
+    background: rgba(255,255,255,0.75);
+    font-weight: bold;
+    font-size: 17px;
+  }
+"))
+title <- tags$div(
+  tag.map.title, HTML("Gun Background Checks by States<br/>Texas has the highest number of handguns")
+)  
+
+## plot
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(-98.483330, 38.712046, zoom = 4) %>% 
+  addPolygons(data = q5_dv, 
+              fillColor = ~pal_sb(q5_dv$total), 
+              fillOpacity = 0.9, 
+              weight = 0.2, 
+              smoothFactor = 0.2,
+              highlight = highlightOptions(
+                  weight = 5,
+                  color = "#666",
+                  fillOpacity = 0.7,
+                   bringToFront = TRUE),
+              label=popup_sb,
+              labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto")) %>%
+    leaflet::addLegend(pal = pal_sb, 
+            values = q5_dv$total, 
+            position = "bottomright", 
+            title = "Handgun<br/> total number<br/>for each state")%>%
+  addControl(title, position = "topleft", className="map-title")
+```
+
+Question 6: Create an animated plot using the FAANG stock data in which you reveal the adjusted prices of the stocks by date as a line chart. Make sure the animation is not too fast AND not too slow. To do so, you’ll likely have to manipulate the number of frames generated and/or the FPS (hint: look at the animation() documentation).
+
+Your plot should have a legend (if necessary), descriptive title and subtitle, and all plot elements should be human readable (no overlapping text, no acronyms unless they are defined, no underscores). Scales should make sense and be rounded to 2 digits or less (if applicable).
+
+BONUS: (not required) - Pause the animation at the end of the time series for a reasonable amount of time before it loops again.
+
+```{r}
+#We create the line plot with date on x axis and adjusted price on y
+p6_FAANG_stocks <- ggplot(FAANG_stocks, aes(x = date, y = adjusted))+
+  geom_line(aes(color = symbol)) +
+  scale_y_continuous(breaks = seq(0,800,100), labels = label_number(prefix = "$"))+ 
+  labs(x= "Time frame", y='Adjusted price', title="Adjusted Stock Prices of FAANG", subtitle="Netflix stock remains highest for a long time", color= "FAANG")+
+  transition_reveal(date)+ 
+  ease_aes('linear')+ 
+  theme_ipsum()
+
+## use the fps argument to control the animate speed 
+animate(p6_FAANG_stocks, nframes = 400, fps = 14, renderer = gifski_renderer()) 
+```
+
